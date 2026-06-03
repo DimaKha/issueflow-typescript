@@ -19,7 +19,8 @@
       "Bash(curl -s -X DELETE http://localhost:3000/users/6)",
       "Bash(curl -s http://localhost:3000/users/6)",
       "Bash(curl -s -X POST http://localhost:3000/users -H 'Content-Type: application/json' -d '{\"username\":\"newdev\",\"email\":\"newdev@test.com\",\"fullName\":\"New Dev\",\"role\":\"DEVELOPER\",\"password\":\"secret123\"}')",
-      "Bash(curl -s -X POST http://localhost:3000/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"secret123\"}')"
+      "Bash(curl -s -X POST http://localhost:3000/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"secret123\"}')",
+      "Bash(npm test *)"
     ]
   }
 }
