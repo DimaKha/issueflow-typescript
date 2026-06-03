@@ -117,24 +117,14 @@ export class TicketsService {
       isOverdue: computeIsOverdue(effectiveDueDate, effectiveStatus),
     };
 
-    if (clientVersion !== undefined) {
-      // Strict optimistic lock: WHERE id AND version
-      const result = await this.repo.update(
-        { id, version: clientVersion },
-        { ...changes, version: clientVersion + 1 },
-      );
-      if (result.affected === 0) {
-        const still = await this.repo.findOne({ where: { id } });
-        if (!still) throw new NotFoundException(`Ticket ${id} not found`);
-        throw new ConflictException('Concurrent modification detected — please refresh and retry');
-      }
-    } else {
-      // Blind update — still increments version
-      const result = await this.repo.update(
-        { id },
-        { ...changes, version: () => 'version + 1' },
-      );
-      if (result.affected === 0) throw new NotFoundException(`Ticket ${id} not found`);
+    const result = await this.repo.update(
+      { id, version: clientVersion },
+      { ...changes, version: clientVersion + 1 },
+    );
+    if (result.affected === 0) {
+      const still = await this.repo.findOne({ where: { id } });
+      if (!still) throw new NotFoundException(`Ticket ${id} not found`);
+      throw new ConflictException('Concurrent modification detected — please refresh and retry');
     }
 
     return this.findOne(id);

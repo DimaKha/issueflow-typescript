@@ -176,7 +176,7 @@ describe('TicketsService', () => {
     it('should throw 400 when ticket is DONE', async () => {
       repo.findOne.mockResolvedValue(mockTicket({ status: TicketStatus.DONE }));
 
-      await expect(service.update(1, { title: 'New title' })).rejects.toThrow(BadRequestException);
+      await expect(service.update(1, { title: 'New title', version: 1 })).rejects.toThrow(BadRequestException);
       expect(repo.update).not.toHaveBeenCalled();
     });
   });
@@ -195,60 +195,60 @@ describe('TicketsService', () => {
 
     it('should allow TODO → IN_PROGRESS', async () => {
       setupTicket(TicketStatus.TODO);
-      const result = await service.update(1, { status: TicketStatus.IN_PROGRESS });
+      await service.update(1, { status: TicketStatus.IN_PROGRESS, version: 1 });
       expect(repo.update).toHaveBeenCalled();
     });
 
     it('should allow IN_PROGRESS → IN_REVIEW', async () => {
       setupTicket(TicketStatus.IN_PROGRESS);
-      await service.update(1, { status: TicketStatus.IN_REVIEW });
+      await service.update(1, { status: TicketStatus.IN_REVIEW, version: 1 });
       expect(repo.update).toHaveBeenCalled();
     });
 
     it('should allow IN_REVIEW → DONE', async () => {
       setupTicket(TicketStatus.IN_REVIEW);
-      await service.update(1, { status: TicketStatus.DONE });
+      await service.update(1, { status: TicketStatus.DONE, version: 1 });
       expect(repo.update).toHaveBeenCalled();
     });
 
     it('should reject TODO → TODO (same status)', async () => {
       repo.findOne.mockResolvedValue(mockTicket({ status: TicketStatus.TODO }));
-      await expect(service.update(1, { status: TicketStatus.TODO })).rejects.toThrow(
+      await expect(service.update(1, { status: TicketStatus.TODO, version: 1 })).rejects.toThrow(
         BadRequestException,
       );
     });
 
     it('should reject TODO → IN_REVIEW (skip)', async () => {
       repo.findOne.mockResolvedValue(mockTicket({ status: TicketStatus.TODO }));
-      await expect(service.update(1, { status: TicketStatus.IN_REVIEW })).rejects.toThrow(
+      await expect(service.update(1, { status: TicketStatus.IN_REVIEW, version: 1 })).rejects.toThrow(
         BadRequestException,
       );
     });
 
     it('should reject TODO → DONE (skip)', async () => {
       repo.findOne.mockResolvedValue(mockTicket({ status: TicketStatus.TODO }));
-      await expect(service.update(1, { status: TicketStatus.DONE })).rejects.toThrow(
+      await expect(service.update(1, { status: TicketStatus.DONE, version: 1 })).rejects.toThrow(
         BadRequestException,
       );
     });
 
     it('should reject IN_PROGRESS → TODO (backward)', async () => {
       repo.findOne.mockResolvedValue(mockTicket({ status: TicketStatus.IN_PROGRESS }));
-      await expect(service.update(1, { status: TicketStatus.TODO })).rejects.toThrow(
+      await expect(service.update(1, { status: TicketStatus.TODO, version: 1 })).rejects.toThrow(
         BadRequestException,
       );
     });
 
     it('should reject IN_REVIEW → IN_PROGRESS (backward)', async () => {
       repo.findOne.mockResolvedValue(mockTicket({ status: TicketStatus.IN_REVIEW }));
-      await expect(service.update(1, { status: TicketStatus.IN_PROGRESS })).rejects.toThrow(
+      await expect(service.update(1, { status: TicketStatus.IN_PROGRESS, version: 1 })).rejects.toThrow(
         BadRequestException,
       );
     });
 
     it('should allow update with no status change', async () => {
       setupTicket(TicketStatus.TODO);
-      await service.update(1, { title: 'Renamed' });
+      await service.update(1, { title: 'Renamed', version: 1 });
       expect(repo.update).toHaveBeenCalled();
     });
   });
@@ -257,25 +257,25 @@ describe('TicketsService', () => {
   // update — optimistic locking
   // ──────────────────────────────────────────────
   describe('update — optimistic locking', () => {
-    it('should update when version matches', async () => {
+    it('should update when version matches and increment to version+1', async () => {
       const ticket = mockTicket({ version: 2 });
       repo.findOne
         .mockResolvedValueOnce(ticket)
         .mockResolvedValueOnce({ ...ticket, version: 3 });
       repo.update.mockResolvedValue({ affected: 1 });
 
-      const result = await service.update(1, { title: 'New', version: 2 });
+      await service.update(1, { title: 'New', version: 2 });
       expect(repo.update).toHaveBeenCalledWith(
         { id: 1, version: 2 },
         expect.objectContaining({ version: 3 }),
       );
     });
 
-    it('should throw ConflictException when version is stale', async () => {
+    it('should throw ConflictException when version is stale (entity still exists)', async () => {
       const ticket = mockTicket({ version: 5 });
       repo.findOne
-        .mockResolvedValueOnce(ticket) // first call in update()
-        .mockResolvedValueOnce(ticket); // existence check inside conflict branch
+        .mockResolvedValueOnce(ticket)  // existence check
+        .mockResolvedValueOnce(ticket); // re-check inside 0-affected branch (entity exists → 409)
       repo.update.mockResolvedValue({ affected: 0 });
 
       await expect(service.update(1, { title: 'X', version: 2 })).rejects.toThrow(
@@ -283,25 +283,25 @@ describe('TicketsService', () => {
       );
     });
 
-    it('should throw NotFoundException when ticket disappears during versionless update', async () => {
-      repo.findOne.mockResolvedValueOnce(mockTicket());
+    it('should throw NotFoundException when entity is deleted between check and update', async () => {
+      const ticket = mockTicket({ version: 1 });
+      repo.findOne
+        .mockResolvedValueOnce(ticket) // existence check passes
+        .mockResolvedValueOnce(null);  // re-check inside 0-affected branch → entity gone → 404
       repo.update.mockResolvedValue({ affected: 0 });
 
-      await expect(service.update(1, { title: 'X' })).rejects.toThrow(NotFoundException);
+      await expect(service.update(1, { title: 'X', version: 1 })).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
-    it('should still increment version when no version supplied', async () => {
-      const ticket = mockTicket();
-      repo.findOne
-        .mockResolvedValueOnce(ticket)
-        .mockResolvedValueOnce({ ...ticket, version: 2 });
-      repo.update.mockResolvedValue({ affected: 1 });
-
-      await service.update(1, { title: 'Renamed' });
-      expect(repo.update).toHaveBeenCalledWith(
-        { id: 1 },
-        expect.objectContaining({ version: expect.any(Function) }),
-      );
+    it('UpdateTicketDto should require version — missing version fails DTO validation', async () => {
+      const { validate } = await import('class-validator');
+      const { plainToInstance } = await import('class-transformer');
+      const { UpdateTicketDto: Dto } = await import('./dto/update-ticket.dto');
+      const dto = plainToInstance(Dto, { title: 'X' });
+      const errors = await validate(dto);
+      expect(errors.find((e) => e.property === 'version')).toBeDefined();
     });
   });
 
@@ -316,9 +316,9 @@ describe('TicketsService', () => {
         .mockResolvedValueOnce({ ...ticket, dueDate: PAST, isOverdue: true });
       repo.update.mockResolvedValue({ affected: 1 });
 
-      await service.update(1, { dueDate: PAST.toISOString() });
+      await service.update(1, { dueDate: PAST.toISOString(), version: 1 });
       expect(repo.update).toHaveBeenCalledWith(
-        { id: 1 },
+        { id: 1, version: 1 },
         expect.objectContaining({ isOverdue: true }),
       );
     });
@@ -330,9 +330,9 @@ describe('TicketsService', () => {
         .mockResolvedValueOnce({ ...ticket, dueDate: FUTURE, isOverdue: false });
       repo.update.mockResolvedValue({ affected: 1 });
 
-      await service.update(1, { dueDate: FUTURE.toISOString() });
+      await service.update(1, { dueDate: FUTURE.toISOString(), version: 1 });
       expect(repo.update).toHaveBeenCalledWith(
-        { id: 1 },
+        { id: 1, version: 1 },
         expect.objectContaining({ isOverdue: false }),
       );
     });

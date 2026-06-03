@@ -7,6 +7,7 @@ import {
   IsDateString,
   Min,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { TicketStatus, TicketPriority, TicketType } from '../ticket.entity';
 
 export class UpdateTicketDto {
@@ -39,8 +40,8 @@ export class UpdateTicketDto {
   @IsDateString()
   dueDate?: string;
 
-  @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(1)
-  version?: number;
+  version: number;
 }
