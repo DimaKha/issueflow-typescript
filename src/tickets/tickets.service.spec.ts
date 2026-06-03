@@ -420,4 +420,149 @@ describe('TicketsService', () => {
       await expect(service.restore(1)).rejects.toThrow(BadRequestException);
     });
   });
+
+  // ──────────────────────────────────────────────
+  // exportCsv
+  // ──────────────────────────────────────────────
+  describe('exportCsv', () => {
+    it('should return a CSV string with header and ticket data', async () => {
+      const ticket = mockTicket({ id: 5, title: 'Export me', description: 'desc' });
+      repo.find.mockResolvedValue([ticket]);
+
+      const result = await service.exportCsv(1);
+
+      expect(typeof result).toBe('string');
+      expect(result).toContain('id');
+      expect(result).toContain('title');
+      expect(result).toContain('5');
+      expect(result).toContain('Export me');
+      expect(repo.find).toHaveBeenCalledWith({ where: { projectId: 1 } });
+    });
+
+    it('should export isOverdue as explicit "true" when dueDate is past and status is not DONE', async () => {
+      const ticket = mockTicket({ dueDate: PAST, status: TicketStatus.TODO, isOverdue: false }); // stored field is stale false
+      repo.find.mockResolvedValue([ticket]);
+
+      const result = await service.exportCsv(1);
+
+      // isOverdue must be recomputed — stored false should NOT appear; recomputed true should
+      const rows = result.split('\n');
+      const headers = rows[0].split(',');
+      const isOverdueIdx = headers.indexOf('isOverdue');
+      const dataRow = rows[1].split(',');
+      expect(dataRow[isOverdueIdx]).toBe('true');
+    });
+
+    it('should export isOverdue as "false" when dueDate is in the future', async () => {
+      const ticket = mockTicket({ dueDate: FUTURE, status: TicketStatus.TODO, isOverdue: true }); // stored field stale
+      repo.find.mockResolvedValue([ticket]);
+
+      const result = await service.exportCsv(1);
+
+      const rows = result.split('\n');
+      const headers = rows[0].split(',');
+      const isOverdueIdx = headers.indexOf('isOverdue');
+      const dataRow = rows[1].split(',');
+      expect(dataRow[isOverdueIdx]).toBe('false');
+    });
+
+    it('should throw BadRequestException when projectId is undefined', async () => {
+      await expect(service.exportCsv(undefined)).rejects.toThrow(BadRequestException);
+      expect(repo.find).not.toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundException when project does not exist', async () => {
+      projectsService.findOne.mockRejectedValueOnce(new NotFoundException());
+      await expect(service.exportCsv(99)).rejects.toThrow(NotFoundException);
+      expect(repo.find).not.toHaveBeenCalled();
+    });
+
+    it('should query tickets without withDeleted (soft-deleted tickets excluded)', async () => {
+      repo.find.mockResolvedValue([]);
+
+      await service.exportCsv(1);
+
+      const call = repo.find.mock.calls[0][0] as any;
+      expect(call.withDeleted).toBeUndefined();
+    });
+  });
+
+  // ──────────────────────────────────────────────
+  // importCsv
+  // ──────────────────────────────────────────────
+  describe('importCsv', () => {
+    beforeEach(() => {
+      repo.create.mockImplementation((dto: any) => ({ ...dto }));
+      repo.save.mockResolvedValue(mockTicket());
+    });
+
+    it('should create tickets for valid CSV rows and return created count', async () => {
+      const csv = 'title,type\nFix login,BUG\nAdd feature,FEATURE\n';
+
+      const result = await service.importCsv(1, Buffer.from(csv), 1);
+
+      expect(result.created).toBe(2);
+      expect(result.failed).toBe(0);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should report invalid type enum rows in errors array', async () => {
+      const csv = 'title,type\nValid ticket,BUG\nBad ticket,INVALID_TYPE\n';
+
+      const result = await service.importCsv(1, Buffer.from(csv), 1);
+
+      expect(result.created).toBe(1);
+      expect(result.failed).toBe(1);
+      expect(result.errors[0].row).toBe(3);
+      expect(result.errors[0].message).toContain('Invalid type');
+    });
+
+    it('should report invalid status enum rows in errors array', async () => {
+      const csv = 'title,type,status\nValid,BUG,TODO\nBad,BUG,FLYING\n';
+
+      const result = await service.importCsv(1, Buffer.from(csv), 1);
+
+      expect(result.created).toBe(1);
+      expect(result.failed).toBe(1);
+      expect(result.errors[0].message).toContain('Invalid status');
+    });
+
+    it('should continue processing after a failed row', async () => {
+      const csv = 'title,type\nFirst valid,BUG\n,INVALID\nSecond valid,FEATURE\n';
+
+      const result = await service.importCsv(1, Buffer.from(csv), 1);
+
+      expect(result.created).toBe(2);
+      expect(result.failed).toBe(1);
+    });
+
+    it('should throw NotFoundException when project does not exist', async () => {
+      projectsService.findOne.mockRejectedValueOnce(new NotFoundException());
+
+      await expect(service.importCsv(99, Buffer.from('title,type\n'), 1)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should ignore id and version columns from CSV', async () => {
+      const csv = 'id,title,type,version\n999,Keep this,BUG,5\n';
+
+      const result = await service.importCsv(1, Buffer.from(csv), 1);
+
+      expect(result.created).toBe(1);
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.not.objectContaining({ id: '999' }),
+      );
+    });
+
+    it('should report missing required field title', async () => {
+      const csv = 'title,type\n,BUG\n';
+
+      const result = await service.importCsv(1, Buffer.from(csv), 1);
+
+      expect(result.created).toBe(0);
+      expect(result.failed).toBe(1);
+      expect(result.errors[0].message).toContain('title');
+    });
+  });
 });

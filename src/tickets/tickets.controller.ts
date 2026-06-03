@@ -10,11 +10,19 @@ import {
   ParseIntPipe,
   HttpCode,
   HttpStatus,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import type { Response } from 'express';
 import { TicketsService } from './tickets.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { QueryTicketsDto } from './dto/query-tickets.dto';
+import { ImportTicketsDto } from './dto/import-tickets.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -30,9 +38,14 @@ export class TicketsController {
   }
 
   @Get('export')
-  export(@Query() query: QueryTicketsDto) {
-    // Stub — fully implemented in M8
-    return [];
+  async export(@Query() query: QueryTicketsDto, @Res() res: Response) {
+    const csv = await this.ticketsService.exportCsv(query.projectId);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="tickets-${query.projectId}.csv"`,
+    );
+    res.send(csv);
   }
 
   @Get()
@@ -48,9 +61,14 @@ export class TicketsController {
   // Static POST routes before /:ticketId/restore
   @Post('import')
   @HttpCode(HttpStatus.OK)
-  import() {
-    // Stub — fully implemented in M8
-    return { created: 0, failed: 0, errors: [] };
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  import(
+    @Body() dto: ImportTicketsDto,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: any,
+  ) {
+    if (!file) throw new BadRequestException('No CSV file uploaded');
+    return this.ticketsService.importCsv(dto.projectId, file.buffer, user?.id ?? null);
   }
 
   @Post()
