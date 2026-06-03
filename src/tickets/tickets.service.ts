@@ -25,6 +25,14 @@ const allowedTransitions: Record<TicketStatus, TicketStatus[]> = {
   [TicketStatus.DONE]: [],
 };
 
+// One escalation step per scheduler run; CRITICAL stays at CRITICAL
+const PRIORITY_NEXT: Record<TicketPriority, TicketPriority> = {
+  [TicketPriority.LOW]: TicketPriority.MEDIUM,
+  [TicketPriority.MEDIUM]: TicketPriority.HIGH,
+  [TicketPriority.HIGH]: TicketPriority.CRITICAL,
+  [TicketPriority.CRITICAL]: TicketPriority.CRITICAL,
+};
+
 function computeIsOverdue(dueDate: Date | null, status: TicketStatus): boolean {
   return dueDate !== null && dueDate < new Date() && status !== TicketStatus.DONE;
 }
@@ -258,6 +266,49 @@ export class TicketsService {
       version: t.version,
     }));
     return stringify(rows, { header: true });
+  }
+
+  // Called by EscalationScheduler every minute (and directly by tests).
+  // Finds all overdue non-DONE non-deleted tickets, advances priority one step,
+  // sets isOverdue=true, and emits an AUTO_ESCALATE audit entry per changed ticket.
+  async escalateOverdueTickets(): Promise<void> {
+    const now = new Date();
+
+    // TypeORM's @DeleteDateColumn automatically adds WHERE deleted_at IS NULL
+    // to standard find() — soft-deleted tickets never appear here.
+    const candidates = await this.repo.find({
+      where: { status: Not(TicketStatus.DONE) },
+    });
+
+    // Filter in-memory: only tickets with a past dueDate qualify for escalation.
+    // The status guard above already excludes DONE at the DB level; we repeat it
+    // here as a safety net so unit tests that bypass TypeORM filters stay correct.
+    const toEscalate = candidates.filter(
+      (t) =>
+        t.dueDate !== null &&
+        t.dueDate < now &&
+        t.status !== TicketStatus.DONE,
+    );
+
+    for (const ticket of toEscalate) {
+      const oldPriority = ticket.priority;
+      const newPriority = PRIORITY_NEXT[oldPriority];
+
+      await this.repo.update(ticket.id, { priority: newPriority, isOverdue: true });
+
+      if (oldPriority !== newPriority) {
+        try {
+          await this.auditLog.log({
+            performedBy: null,
+            actor: 'SYSTEM',
+            action: 'AUTO_ESCALATE',
+            entityType: 'TICKET',
+            entityId: ticket.id,
+            payload: { oldPriority, newPriority },
+          });
+        } catch { /* audit log failure must not break escalation */ }
+      }
+    }
   }
 
   async importCsv(

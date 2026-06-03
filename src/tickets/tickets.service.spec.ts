@@ -51,6 +51,7 @@ describe('TicketsService', () => {
   let userRepo: { find: jest.Mock };
   let projectsService: { findOne: jest.Mock };
   let usersService: { findOne: jest.Mock };
+  let auditLog: { log: jest.Mock };
 
   beforeEach(async () => {
     repo = {
@@ -69,6 +70,7 @@ describe('TicketsService', () => {
     userRepo = { find: jest.fn().mockResolvedValue([]) };
     projectsService = { findOne: jest.fn().mockResolvedValue({ id: 1 }) };
     usersService = { findOne: jest.fn().mockResolvedValue({ id: 1 }) };
+    auditLog = { log: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -78,7 +80,7 @@ describe('TicketsService', () => {
         { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: ProjectsService, useValue: projectsService },
         { provide: UsersService, useValue: usersService },
-        { provide: AuditLogService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
+        { provide: AuditLogService, useValue: auditLog },
       ],
     }).compile();
 
@@ -662,6 +664,152 @@ describe('TicketsService', () => {
       expect(result.created).toBe(0);
       expect(result.failed).toBe(1);
       expect(result.errors[0].message).toContain('title');
+    });
+  });
+
+  // ──────────────────────────────────────────────
+  // escalateOverdueTickets
+  // ──────────────────────────────────────────────
+  describe('escalateOverdueTickets', () => {
+    beforeEach(() => {
+      repo.update.mockResolvedValue({ affected: 1 });
+    });
+
+    const overdue = (id: number, priority: TicketPriority, status = TicketStatus.TODO) =>
+      mockTicket({ id, priority, dueDate: PAST, status });
+
+    it('should escalate LOW → MEDIUM for an overdue ticket', async () => {
+      repo.find.mockResolvedValue([overdue(1, TicketPriority.LOW)]);
+
+      await service.escalateOverdueTickets();
+
+      expect(repo.update).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ priority: TicketPriority.MEDIUM, isOverdue: true }),
+      );
+    });
+
+    it('should escalate MEDIUM → HIGH for an overdue ticket', async () => {
+      repo.find.mockResolvedValue([overdue(2, TicketPriority.MEDIUM, TicketStatus.IN_PROGRESS)]);
+
+      await service.escalateOverdueTickets();
+
+      expect(repo.update).toHaveBeenCalledWith(
+        2,
+        expect.objectContaining({ priority: TicketPriority.HIGH, isOverdue: true }),
+      );
+    });
+
+    it('should escalate HIGH → CRITICAL for an overdue ticket', async () => {
+      repo.find.mockResolvedValue([overdue(3, TicketPriority.HIGH, TicketStatus.IN_REVIEW)]);
+
+      await service.escalateOverdueTickets();
+
+      expect(repo.update).toHaveBeenCalledWith(
+        3,
+        expect.objectContaining({ priority: TicketPriority.CRITICAL, isOverdue: true }),
+      );
+    });
+
+    it('should keep CRITICAL at CRITICAL and not emit an audit log', async () => {
+      repo.find.mockResolvedValue([overdue(4, TicketPriority.CRITICAL)]);
+
+      await service.escalateOverdueTickets();
+
+      // isOverdue is still set to true, but priority does not change
+      expect(repo.update).toHaveBeenCalledWith(
+        4,
+        expect.objectContaining({ priority: TicketPriority.CRITICAL, isOverdue: true }),
+      );
+      // No audit log when priority doesn't change
+      expect(auditLog.log).not.toHaveBeenCalled();
+    });
+
+    it('should not escalate DONE tickets', async () => {
+      // DONE tickets are excluded at the DB query level (where: { status: Not(DONE) }).
+      // Repeat the status guard in the in-memory filter ensures correctness even if
+      // a caller passes a DONE ticket through the mock.
+      repo.find.mockResolvedValue([
+        mockTicket({ id: 5, priority: TicketPriority.LOW, dueDate: PAST, status: TicketStatus.DONE }),
+      ]);
+
+      await service.escalateOverdueTickets();
+
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(auditLog.log).not.toHaveBeenCalled();
+    });
+
+    it('should not escalate tickets with a future dueDate', async () => {
+      repo.find.mockResolvedValue([
+        mockTicket({ id: 6, priority: TicketPriority.LOW, dueDate: FUTURE, status: TicketStatus.TODO }),
+      ]);
+
+      await service.escalateOverdueTickets();
+
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('should not escalate tickets without a dueDate', async () => {
+      repo.find.mockResolvedValue([
+        mockTicket({ id: 7, priority: TicketPriority.LOW, dueDate: null, status: TicketStatus.TODO }),
+      ]);
+
+      await service.escalateOverdueTickets();
+
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('should not escalate soft-deleted tickets (TypeORM @DeleteDateColumn auto-excludes them)', async () => {
+      // Standard find() never returns soft-deleted rows when @DeleteDateColumn is set.
+      // Verify withDeleted is not passed (which would bypass that filter).
+      repo.find.mockResolvedValue([]);
+
+      await service.escalateOverdueTickets();
+
+      expect(repo.find).toHaveBeenCalledWith(
+        expect.not.objectContaining({ withDeleted: true }),
+      );
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('should create an AUTO_ESCALATE audit log for each escalated ticket', async () => {
+      repo.find.mockResolvedValue([overdue(8, TicketPriority.LOW)]);
+
+      await service.escalateOverdueTickets();
+
+      expect(auditLog.log).toHaveBeenCalledTimes(1);
+      expect(auditLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: 'SYSTEM',
+          action: 'AUTO_ESCALATE',
+          entityType: 'TICKET',
+          entityId: 8,
+          performedBy: null,
+          payload: { oldPriority: TicketPriority.LOW, newPriority: TicketPriority.MEDIUM },
+        }),
+      );
+    });
+
+    it('should advance each ticket by exactly one priority step per run', async () => {
+      // Even with multiple tickets, each advances by one step — not multiple steps.
+      repo.find.mockResolvedValue([
+        overdue(9, TicketPriority.LOW),
+        overdue(10, TicketPriority.HIGH),
+      ]);
+
+      await service.escalateOverdueTickets();
+
+      expect(repo.update).toHaveBeenCalledTimes(2);
+      expect(repo.update).toHaveBeenCalledWith(
+        9,
+        expect.objectContaining({ priority: TicketPriority.MEDIUM }),
+      );
+      expect(repo.update).toHaveBeenCalledWith(
+        10,
+        expect.objectContaining({ priority: TicketPriority.CRITICAL }),
+      );
+      // LOW→MEDIUM and HIGH→CRITICAL: two audit entries
+      expect(auditLog.log).toHaveBeenCalledTimes(2);
     });
   });
 });
