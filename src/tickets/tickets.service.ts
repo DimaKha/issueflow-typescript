@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not } from 'typeorm';
 import { Ticket, TicketStatus, TicketPriority } from './ticket.entity';
+import { TicketDependency } from './ticket-dependency.entity';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { QueryTicketsDto } from './dto/query-tickets.dto';
@@ -30,6 +31,8 @@ export class TicketsService {
   constructor(
     @InjectRepository(Ticket)
     private readonly repo: Repository<Ticket>,
+    @InjectRepository(TicketDependency)
+    private readonly depRepo: Repository<TicketDependency>,
     private readonly projectsService: ProjectsService,
     private readonly usersService: UsersService,
     private readonly auditLog: AuditLogService,
@@ -92,10 +95,12 @@ export class TicketsService {
   async update(id: number, dto: UpdateTicketDto, performedBy?: number | null): Promise<Ticket> {
     const existing = await this.findOne(id);
 
+    // Cannot update a DONE ticket
     if (existing.status === TicketStatus.DONE) {
       throw new BadRequestException('Cannot update a ticket with status DONE');
     }
 
+    // Validate status transition if status is changing
     if (dto.status !== undefined) {
       if (!allowedTransitions[existing.status].includes(dto.status)) {
         throw new BadRequestException(
@@ -104,10 +109,25 @@ export class TicketsService {
       }
     }
 
+    // Validate assignee if changing
     if (dto.assigneeId !== undefined) {
       await this.usersService.findOne(dto.assigneeId);
     }
 
+    // Block DONE transition if any blocker is not yet DONE
+    if (dto.status === TicketStatus.DONE) {
+      const blockerDeps = await this.depRepo.find({ where: { ticketId: id } });
+      for (const dep of blockerDeps) {
+        const blockerTicket = await this.repo.findOne({ where: { id: dep.blockerId } });
+        if (blockerTicket && blockerTicket.status !== TicketStatus.DONE) {
+          throw new BadRequestException(
+            `Ticket ${dep.blockerId} is still blocking this ticket (status: ${blockerTicket.status})`,
+          );
+        }
+      }
+    }
+
+    // Resolve effective post-update values for isOverdue
     const effectiveDueDate =
       dto.dueDate !== undefined
         ? dto.dueDate === null
@@ -116,6 +136,7 @@ export class TicketsService {
         : existing.dueDate;
     const effectiveStatus = dto.status ?? existing.status;
 
+    // Build changes object (never include version here — handled separately)
     const { version: clientVersion, ...fields } = dto;
     const changes: Partial<Ticket> = {
       ...fields,

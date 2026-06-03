@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { TicketsService } from './tickets.service';
 import { Ticket, TicketStatus, TicketPriority, TicketType } from './ticket.entity';
+import { TicketDependency } from './ticket-dependency.entity';
 import { ProjectsService } from '../projects/projects.service';
 import { UsersService } from '../users/users.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -44,6 +45,7 @@ describe('TicketsService', () => {
     softRemove: jest.Mock;
     restore: jest.Mock;
   };
+  let depRepo: { find: jest.Mock };
   let projectsService: { findOne: jest.Mock };
   let usersService: { findOne: jest.Mock };
 
@@ -57,6 +59,8 @@ describe('TicketsService', () => {
       softRemove: jest.fn(),
       restore: jest.fn(),
     };
+    // Default: no blockers — existing tests that transition to DONE pass without a blocker check
+    depRepo = { find: jest.fn().mockResolvedValue([]) };
     projectsService = { findOne: jest.fn().mockResolvedValue({ id: 1 }) };
     usersService = { findOne: jest.fn().mockResolvedValue({ id: 1 }) };
 
@@ -64,6 +68,7 @@ describe('TicketsService', () => {
       providers: [
         TicketsService,
         { provide: getRepositoryToken(Ticket), useValue: repo },
+        { provide: getRepositoryToken(TicketDependency), useValue: depRepo },
         { provide: ProjectsService, useValue: projectsService },
         { provide: UsersService, useValue: usersService },
         { provide: AuditLogService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
@@ -304,6 +309,39 @@ describe('TicketsService', () => {
       const dto = plainToInstance(Dto, { title: 'X' });
       const errors = await validate(dto);
       expect(errors.find((e) => e.property === 'version')).toBeDefined();
+    });
+  });
+
+  // ──────────────────────────────────────────────
+  // update — blocker check before DONE
+  // ──────────────────────────────────────────────
+  describe('update — blocker check', () => {
+    it('should throw BadRequestException when moving to DONE with an unresolved blocker', async () => {
+      const ticket = mockTicket({ status: TicketStatus.IN_REVIEW });
+      // findOne #1: initial ticket; findOne #2: blocker ticket (not DONE)
+      repo.findOne
+        .mockResolvedValueOnce(ticket)
+        .mockResolvedValueOnce(mockTicket({ id: 2, status: TicketStatus.IN_PROGRESS }));
+      depRepo.find.mockResolvedValue([{ ticketId: 1, blockerId: 2 }]);
+
+      await expect(
+        service.update(1, { status: TicketStatus.DONE, version: 1 }),
+      ).rejects.toThrow(BadRequestException);
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('should allow moving to DONE when all blockers are DONE', async () => {
+      const ticket = mockTicket({ status: TicketStatus.IN_REVIEW });
+      // findOne #1: initial ticket; findOne #2: blocker (DONE); findOne #3: reload after update
+      repo.findOne
+        .mockResolvedValueOnce(ticket)
+        .mockResolvedValueOnce(mockTicket({ id: 2, status: TicketStatus.DONE }))
+        .mockResolvedValueOnce({ ...ticket, status: TicketStatus.DONE, version: 2 });
+      depRepo.find.mockResolvedValue([{ ticketId: 1, blockerId: 2 }]);
+      repo.update.mockResolvedValue({ affected: 1 });
+
+      await service.update(1, { status: TicketStatus.DONE, version: 1 });
+      expect(repo.update).toHaveBeenCalled();
     });
   });
 

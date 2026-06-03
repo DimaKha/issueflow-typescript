@@ -11,6 +11,7 @@ import { ProjectsModule } from './projects/projects.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { CommentsModule } from './comments/comments.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
+import { AttachmentsModule } from './attachments/attachments.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -38,6 +39,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     ProjectsModule,
     TicketsModule,
     CommentsModule,
+    AttachmentsModule,
   ],
   controllers: [AppController],
   providers: [
