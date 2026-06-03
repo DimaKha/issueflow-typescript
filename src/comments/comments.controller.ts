@@ -14,6 +14,7 @@ import { CommentsService } from './comments.service';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
 import { CommentResponse } from './dto/comment-response.dto';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('tickets/:ticketId/comments')
 export class CommentsController {
@@ -29,8 +30,9 @@ export class CommentsController {
   create(
     @Param('ticketId', ParseIntPipe) ticketId: number,
     @Body() dto: CreateCommentDto,
+    @CurrentUser() user: any,
   ): Promise<CommentResponse> {
-    return this.commentsService.create(ticketId, dto);
+    return this.commentsService.create(ticketId, dto, user?.id ?? null);
   }
 
   @Patch(':commentId')
@@ -39,8 +41,9 @@ export class CommentsController {
     @Param('ticketId', ParseIntPipe) ticketId: number,
     @Param('commentId', ParseIntPipe) commentId: number,
     @Body() dto: UpdateCommentDto,
+    @CurrentUser() user: any,
   ): Promise<CommentResponse> {
-    return this.commentsService.update(ticketId, commentId, dto);
+    return this.commentsService.update(ticketId, commentId, dto, user?.id ?? null);
   }
 
   @Delete(':commentId')
@@ -48,7 +51,8 @@ export class CommentsController {
   remove(
     @Param('ticketId', ParseIntPipe) ticketId: number,
     @Param('commentId', ParseIntPipe) commentId: number,
+    @CurrentUser() user: any,
   ) {
-    return this.commentsService.remove(ticketId, commentId);
+    return this.commentsService.remove(ticketId, commentId, user?.id ?? null);
   }
 }

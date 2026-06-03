@@ -16,6 +16,7 @@ import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { QueryTicketsDto } from './dto/query-tickets.dto';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('tickets')
 export class TicketsController {
@@ -54,8 +55,8 @@ export class TicketsController {
 
   @Post()
   @HttpCode(HttpStatus.OK)
-  create(@Body() dto: CreateTicketDto) {
-    return this.ticketsService.create(dto);
+  create(@Body() dto: CreateTicketDto, @CurrentUser() user: any) {
+    return this.ticketsService.create(dto, user?.id ?? null);
   }
 
   @Patch(':ticketId')
@@ -63,20 +64,21 @@ export class TicketsController {
   update(
     @Param('ticketId', ParseIntPipe) ticketId: number,
     @Body() dto: UpdateTicketDto,
+    @CurrentUser() user: any,
   ) {
-    return this.ticketsService.update(ticketId, dto);
+    return this.ticketsService.update(ticketId, dto, user?.id ?? null);
   }
 
   @Delete(':ticketId')
   @HttpCode(HttpStatus.OK)
-  remove(@Param('ticketId', ParseIntPipe) ticketId: number) {
-    return this.ticketsService.remove(ticketId);
+  remove(@Param('ticketId', ParseIntPipe) ticketId: number, @CurrentUser() user: any) {
+    return this.ticketsService.remove(ticketId, user?.id ?? null);
   }
 
   @Post(':ticketId/restore')
   @HttpCode(HttpStatus.OK)
   @Roles('ADMIN')
-  restore(@Param('ticketId', ParseIntPipe) ticketId: number) {
-    return this.ticketsService.restore(ticketId);
+  restore(@Param('ticketId', ParseIntPipe) ticketId: number, @CurrentUser() user: any) {
+    return this.ticketsService.restore(ticketId, user?.id ?? null);
   }
 }

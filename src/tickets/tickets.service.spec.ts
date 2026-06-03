@@ -9,6 +9,7 @@ import { TicketsService } from './tickets.service';
 import { Ticket, TicketStatus, TicketPriority, TicketType } from './ticket.entity';
 import { ProjectsService } from '../projects/projects.service';
 import { UsersService } from '../users/users.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
 
 const FUTURE = new Date(Date.now() + 86_400_000);  // tomorrow
 const PAST   = new Date('2020-01-01T00:00:00Z');
@@ -65,6 +66,7 @@ describe('TicketsService', () => {
         { provide: getRepositoryToken(Ticket), useValue: repo },
         { provide: ProjectsService, useValue: projectsService },
         { provide: UsersService, useValue: usersService },
+        { provide: AuditLogService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 

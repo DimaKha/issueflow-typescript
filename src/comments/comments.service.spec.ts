@@ -10,6 +10,7 @@ import { CommentsService } from './comments.service';
 import { Comment } from './comment.entity';
 import { TicketsService } from '../tickets/tickets.service';
 import { UsersService } from '../users/users.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
 
 const mockUser = (id: number, username: string) => ({
   id,
@@ -84,6 +85,7 @@ describe('CommentsService', () => {
         { provide: DataSource, useValue: dataSource },
         { provide: TicketsService, useValue: ticketsService },
         { provide: UsersService, useValue: usersService },
+        { provide: AuditLogService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 

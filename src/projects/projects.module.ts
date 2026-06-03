@@ -4,9 +4,10 @@ import { ProjectsController } from './projects.controller';
 import { ProjectsService } from './projects.service';
 import { Project } from './project.entity';
 import { UsersModule } from '../users/users.module';
+import { AuditLogModule } from '../audit-log/audit-log.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Project]), UsersModule],
+  imports: [TypeOrmModule.forFeature([Project]), UsersModule, AuditLogModule],
   controllers: [ProjectsController],
   providers: [ProjectsService],
   exports: [ProjectsService],

@@ -12,6 +12,7 @@ import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { QueryTicketsDto } from './dto/query-tickets.dto';
 import { ProjectsService } from '../projects/projects.service';
 import { UsersService } from '../users/users.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
 
 const allowedTransitions: Record<TicketStatus, TicketStatus[]> = {
   [TicketStatus.TODO]: [TicketStatus.IN_PROGRESS],
@@ -31,13 +32,12 @@ export class TicketsService {
     private readonly repo: Repository<Ticket>,
     private readonly projectsService: ProjectsService,
     private readonly usersService: UsersService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
-  async create(dto: CreateTicketDto): Promise<Ticket> {
-    // Validate project exists and is not soft-deleted
+  async create(dto: CreateTicketDto, performedBy?: number | null): Promise<Ticket> {
     await this.projectsService.findOne(dto.projectId);
 
-    // Validate assignee if provided
     if (dto.assigneeId !== undefined) {
       await this.usersService.findOne(dto.assigneeId);
     }
@@ -57,7 +57,18 @@ export class TicketsService {
       isOverdue: computeIsOverdue(dueDate, status),
     });
 
-    return this.repo.save(ticket);
+    const saved = await this.repo.save(ticket);
+    try {
+      await this.auditLog.log({
+        performedBy: performedBy ?? null,
+        actor: 'USER',
+        action: 'CREATE',
+        entityType: 'TICKET',
+        entityId: saved.id,
+        payload: { id: saved.id, title: saved.title, status: saved.status, priority: saved.priority, type: saved.type, projectId: saved.projectId, assigneeId: saved.assigneeId },
+      });
+    } catch { /* audit log failure must not break main operation */ }
+    return saved;
   }
 
   async findAll(query: QueryTicketsDto): Promise<Ticket[]> {
@@ -78,15 +89,13 @@ export class TicketsService {
     return ticket;
   }
 
-  async update(id: number, dto: UpdateTicketDto): Promise<Ticket> {
+  async update(id: number, dto: UpdateTicketDto, performedBy?: number | null): Promise<Ticket> {
     const existing = await this.findOne(id);
 
-    // Cannot update a DONE ticket
     if (existing.status === TicketStatus.DONE) {
       throw new BadRequestException('Cannot update a ticket with status DONE');
     }
 
-    // Validate status transition if status is changing
     if (dto.status !== undefined) {
       if (!allowedTransitions[existing.status].includes(dto.status)) {
         throw new BadRequestException(
@@ -95,12 +104,10 @@ export class TicketsService {
       }
     }
 
-    // Validate assignee if changing
     if (dto.assigneeId !== undefined) {
       await this.usersService.findOne(dto.assigneeId);
     }
 
-    // Resolve effective post-update values for isOverdue
     const effectiveDueDate =
       dto.dueDate !== undefined
         ? dto.dueDate === null
@@ -109,7 +116,6 @@ export class TicketsService {
         : existing.dueDate;
     const effectiveStatus = dto.status ?? existing.status;
 
-    // Build changes object (never include version here — handled separately)
     const { version: clientVersion, ...fields } = dto;
     const changes: Partial<Ticket> = {
       ...fields,
@@ -127,19 +133,51 @@ export class TicketsService {
       throw new ConflictException('Concurrent modification detected — please refresh and retry');
     }
 
-    return this.findOne(id);
+    const updated = await this.findOne(id);
+    try {
+      await this.auditLog.log({
+        performedBy: performedBy ?? null,
+        actor: 'USER',
+        action: 'UPDATE',
+        entityType: 'TICKET',
+        entityId: id,
+        payload: { id: updated.id, title: updated.title, status: updated.status, priority: updated.priority, assigneeId: updated.assigneeId, version: updated.version },
+      });
+    } catch { /* audit log failure must not break main operation */ }
+    return updated;
   }
 
-  async remove(id: number): Promise<void> {
+  async remove(id: number, performedBy?: number | null): Promise<void> {
     const ticket = await this.findOne(id);
     await this.repo.softRemove(ticket);
+    try {
+      await this.auditLog.log({
+        performedBy: performedBy ?? null,
+        actor: 'USER',
+        action: 'DELETE',
+        entityType: 'TICKET',
+        entityId: id,
+        payload: { id, title: ticket.title, projectId: ticket.projectId },
+      });
+    } catch { /* audit log failure must not break main operation */ }
   }
 
-  async restore(id: number): Promise<Ticket> {
+  async restore(id: number, performedBy?: number | null): Promise<Ticket> {
     const ticket = await this.repo.findOne({ where: { id }, withDeleted: true });
     if (!ticket) throw new NotFoundException(`Ticket ${id} not found`);
     if (!ticket.deletedAt) throw new BadRequestException(`Ticket ${id} is not deleted`);
     await this.repo.restore(id);
-    return this.repo.findOne({ where: { id } }) as Promise<Ticket>;
+    const restored = await this.repo.findOne({ where: { id } }) as Ticket;
+    try {
+      await this.auditLog.log({
+        performedBy: performedBy ?? null,
+        actor: 'USER',
+        action: 'RESTORE',
+        entityType: 'TICKET',
+        entityId: id,
+        payload: { id: restored.id, title: restored.title, projectId: restored.projectId },
+      });
+    } catch { /* audit log failure must not break main operation */ }
+    return restored;
   }
 }

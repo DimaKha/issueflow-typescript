@@ -14,6 +14,7 @@ import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('projects')
 export class ProjectsController {
@@ -44,8 +45,8 @@ export class ProjectsController {
 
   @Post()
   @HttpCode(HttpStatus.OK)
-  create(@Body() dto: CreateProjectDto) {
-    return this.projectsService.create(dto);
+  create(@Body() dto: CreateProjectDto, @CurrentUser() user: any) {
+    return this.projectsService.create(dto, user?.id ?? null);
   }
 
   @Patch(':projectId')
@@ -53,20 +54,21 @@ export class ProjectsController {
   update(
     @Param('projectId', ParseIntPipe) projectId: number,
     @Body() dto: UpdateProjectDto,
+    @CurrentUser() user: any,
   ) {
-    return this.projectsService.update(projectId, dto);
+    return this.projectsService.update(projectId, dto, user?.id ?? null);
   }
 
   @Delete(':projectId')
   @HttpCode(HttpStatus.OK)
-  remove(@Param('projectId', ParseIntPipe) projectId: number) {
-    return this.projectsService.remove(projectId);
+  remove(@Param('projectId', ParseIntPipe) projectId: number, @CurrentUser() user: any) {
+    return this.projectsService.remove(projectId, user?.id ?? null);
   }
 
   @Post(':projectId/restore')
   @HttpCode(HttpStatus.OK)
   @Roles('ADMIN')
-  restore(@Param('projectId', ParseIntPipe) projectId: number) {
-    return this.projectsService.restore(projectId);
+  restore(@Param('projectId', ParseIntPipe) projectId: number, @CurrentUser() user: any) {
+    return this.projectsService.restore(projectId, user?.id ?? null);
   }
 }

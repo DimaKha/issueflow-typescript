@@ -13,6 +13,7 @@ import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { Public } from '../common/decorators/public.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('users')
 export class UsersController {
@@ -32,8 +33,9 @@ export class UsersController {
   @Public()
   @Post()
   @HttpCode(HttpStatus.OK)
-  create(@Body() dto: CreateUserDto) {
-    return this.usersService.create(dto);
+  create(@Body() dto: CreateUserDto, @CurrentUser() user: any) {
+    // user is null/undefined on this public route — performedBy will be null
+    return this.usersService.create(dto, user?.id ?? null);
   }
 
   @Post('update/:userId')
@@ -41,13 +43,14 @@ export class UsersController {
   update(
     @Param('userId', ParseIntPipe) id: number,
     @Body() dto: UpdateUserDto,
+    @CurrentUser() user: any,
   ) {
-    return this.usersService.update(id, dto);
+    return this.usersService.update(id, dto, user?.id ?? null);
   }
 
   @Delete(':userId')
   @HttpCode(HttpStatus.OK)
-  remove(@Param('userId', ParseIntPipe) id: number) {
-    return this.usersService.remove(id);
+  remove(@Param('userId', ParseIntPipe) id: number, @CurrentUser() user: any) {
+    return this.usersService.remove(id, user?.id ?? null);
   }
 }

@@ -13,6 +13,7 @@ import { UpdateCommentDto } from './dto/update-comment.dto';
 import { CommentResponse } from './dto/comment-response.dto';
 import { TicketsService } from '../tickets/tickets.service';
 import { UsersService } from '../users/users.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
 
 @Injectable()
 export class CommentsService {
@@ -22,6 +23,7 @@ export class CommentsService {
     private readonly dataSource: DataSource,
     private readonly ticketsService: TicketsService,
     private readonly usersService: UsersService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   private async resolveMentions(content: string): Promise<User[]> {
@@ -53,12 +55,9 @@ export class CommentsService {
     };
   }
 
-  async create(ticketId: number, dto: CreateCommentDto): Promise<CommentResponse> {
-    // Validate ticket exists and is not soft-deleted
+  async create(ticketId: number, dto: CreateCommentDto, performedBy?: number | null): Promise<CommentResponse> {
     await this.ticketsService.findOne(ticketId);
-    // Validate author
     await this.usersService.findOne(dto.authorId);
-    // Resolve @mentions
     const mentionedUsers = await this.resolveMentions(dto.content);
 
     const comment = this.repo.create({
@@ -69,12 +68,22 @@ export class CommentsService {
     });
     const saved = await this.repo.save(comment);
 
-    // Reload with relations to ensure mentionedUsers are populated
     const reloaded = await this.repo.findOne({
       where: { id: saved.id },
       relations: ['mentionedUsers'],
     });
-    return this.toResponse(reloaded!);
+    const response = this.toResponse(reloaded!);
+    try {
+      await this.auditLog.log({
+        performedBy: performedBy ?? null,
+        actor: 'USER',
+        action: 'CREATE',
+        entityType: 'COMMENT',
+        entityId: reloaded!.id,
+        payload: { id: reloaded!.id, ticketId, authorId: dto.authorId, content: dto.content },
+      });
+    } catch { /* audit log failure must not break main operation */ }
+    return response;
   }
 
   async findAll(ticketId: number): Promise<CommentResponse[]> {
@@ -89,8 +98,8 @@ export class CommentsService {
     ticketId: number,
     commentId: number,
     dto: UpdateCommentDto,
+    performedBy?: number | null,
   ): Promise<CommentResponse> {
-    // Resolve new mentions before the transaction (throws 400 for unknown usernames)
     let resolvedUsers: User[] = [];
     if (dto.content !== undefined) {
       resolvedUsers = await this.resolveMentions(dto.content);
@@ -99,7 +108,6 @@ export class CommentsService {
     let updatedComment: Comment | null = null;
 
     await this.dataSource.transaction(async (manager) => {
-      // Verify comment exists and belongs to this ticket
       const existing = await manager.findOne(Comment, { where: { id: commentId } });
       if (!existing) throw new NotFoundException(`Comment ${commentId} not found`);
       if (existing.ticketId !== ticketId) {
@@ -122,14 +130,12 @@ export class CommentsService {
         );
       }
 
-      // Replace ManyToMany relation if content changed
       if (dto.content !== undefined) {
         const withRelations = await manager.findOne(Comment, {
           where: { id: commentId },
           relations: ['mentionedUsers'],
         });
         withRelations!.mentionedUsers = resolvedUsers;
-        // save() returns the entity with mentionedUsers already populated (we set them above)
         updatedComment = await manager.save(Comment, withRelations!);
       } else {
         updatedComment = await manager.findOne(Comment, {
@@ -139,15 +145,36 @@ export class CommentsService {
       }
     });
 
-    return this.toResponse(updatedComment!);
+    const response = this.toResponse(updatedComment!);
+    try {
+      await this.auditLog.log({
+        performedBy: performedBy ?? null,
+        actor: 'USER',
+        action: 'UPDATE',
+        entityType: 'COMMENT',
+        entityId: commentId,
+        payload: { id: commentId, ticketId, content: dto.content },
+      });
+    } catch { /* audit log failure must not break main operation */ }
+    return response;
   }
 
-  async remove(ticketId: number, commentId: number): Promise<void> {
+  async remove(ticketId: number, commentId: number, performedBy?: number | null): Promise<void> {
     const comment = await this.repo.findOne({ where: { id: commentId } });
     if (!comment) throw new NotFoundException(`Comment ${commentId} not found`);
     if (comment.ticketId !== ticketId) {
       throw new NotFoundException(`Comment ${commentId} not found for ticket ${ticketId}`);
     }
     await this.repo.softRemove(comment);
+    try {
+      await this.auditLog.log({
+        performedBy: performedBy ?? null,
+        actor: 'USER',
+        action: 'DELETE',
+        entityType: 'COMMENT',
+        entityId: commentId,
+        payload: { id: commentId, ticketId },
+      });
+    } catch { /* audit log failure must not break main operation */ }
   }
 }
