@@ -1,7 +1,23 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(npx jest *)",
+      "Bash(timeout 15 npm run start:dev)",
+      "Bash(timeout 30 npm run start:dev)",
+      "Bash(curl -s -X POST http://localhost:3000/users -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"email\":\"admin@test.com\",\"fullName\":\"Admin User\",\"role\":\"ADMIN\",\"password\":\"secret123\"}')",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:3000/users -H 'Content-Type: application/json' -d '{\"username\":\"jdoe\",\"email\":\"jdoe@test.com\",\"fullName\":\"John Doe\",\"role\":\"DEVELOPER\",\"password\":\"secret123\"}')",
+      "Bash(curl -s http://localhost:3000/users)",
+      "Bash(curl -s http://localhost:3000/users/1)",
+      "Bash(curl -s http://localhost:3000/users/999)",
+      "Bash(curl -s -X POST http://localhost:3000/users/update/1 -H 'Content-Type: application/json' -d '{\"fullName\":\"Admin Updated\"}')",
+      "Bash(curl -s -X POST http://localhost:3000/users -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"email\":\"newemail@test.com\",\"fullName\":\"Dup\",\"role\":\"DEVELOPER\",\"password\":\"secret123\"}')",
+      "Bash(curl -s -X POST http://localhost:3000/users -H 'Content-Type: application/json' -d '{\"username\":\"temp\",\"email\":\"temp@test.com\",\"fullName\":\"Temp\",\"role\":\"DEVELOPER\",\"password\":\"secret123\"}')",
+      "Bash(curl -s -X DELETE http://localhost:3000/users/3)",
+      "Bash(curl -s http://localhost:3000/users/3)",
+      "Bash(curl -s -X DELETE http://localhost:3000/users/6)",
+      "Bash(curl -s http://localhost:3000/users/6)"
     ]
   }
 }
