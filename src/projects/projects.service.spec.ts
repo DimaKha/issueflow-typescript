@@ -3,6 +3,8 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
 import { Project } from './project.entity';
+import { Ticket } from '../tickets/ticket.entity';
+import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 
@@ -28,6 +30,8 @@ describe('ProjectsService', () => {
     softRemove: jest.Mock;
     restore: jest.Mock;
   };
+  let ticketRepo: { count: jest.Mock };
+  let userRepo: { find: jest.Mock };
   let usersService: { findOne: jest.Mock };
 
   beforeEach(async () => {
@@ -39,12 +43,16 @@ describe('ProjectsService', () => {
       softRemove: jest.fn(),
       restore: jest.fn(),
     };
+    ticketRepo = { count: jest.fn().mockResolvedValue(0) };
+    userRepo = { find: jest.fn().mockResolvedValue([]) };
     usersService = { findOne: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProjectsService,
         { provide: getRepositoryToken(Project), useValue: repo },
+        { provide: getRepositoryToken(Ticket), useValue: ticketRepo },
+        { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: UsersService, useValue: usersService },
         { provide: AuditLogService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
       ],
@@ -185,6 +193,61 @@ describe('ProjectsService', () => {
       repo.findOne.mockResolvedValue(mockProject({ deletedAt: null }));
 
       await expect(service.restore(1)).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ──────────────────────────────────────────────
+  // getWorkload
+  // ──────────────────────────────────────────────
+  describe('getWorkload', () => {
+    const dev = (id: number, username: string, fullName: string) => ({
+      id,
+      username,
+      fullName,
+      role: 'DEVELOPER',
+    });
+
+    it('should return open ticket counts for all developers in the project', async () => {
+      repo.findOne.mockResolvedValue(mockProject());
+      userRepo.find.mockResolvedValue([
+        dev(2, 'dev1', 'Dev One'),
+        dev(3, 'dev2', 'Dev Two'),
+      ]);
+      ticketRepo.count.mockResolvedValueOnce(3).mockResolvedValueOnce(1);
+
+      const result = await service.getWorkload(1);
+
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({ userId: 2, username: 'dev1', fullName: 'Dev One', openTicketCount: 3 });
+      expect(result[1]).toEqual({ userId: 3, username: 'dev2', fullName: 'Dev Two', openTicketCount: 1 });
+    });
+
+    it('should return empty array when no developers exist', async () => {
+      repo.findOne.mockResolvedValue(mockProject());
+      userRepo.find.mockResolvedValue([]);
+
+      const result = await service.getWorkload(1);
+
+      expect(result).toEqual([]);
+      expect(ticketRepo.count).not.toHaveBeenCalled();
+    });
+
+    it('should return developers sorted by userId', async () => {
+      repo.findOne.mockResolvedValue(mockProject());
+      userRepo.find.mockResolvedValue([dev(5, 'devE', 'E'), dev(2, 'devB', 'B')]);
+      ticketRepo.count.mockResolvedValue(1);
+
+      const result = await service.getWorkload(1);
+
+      expect(result[0].userId).toBe(2);
+      expect(result[1].userId).toBe(5);
+    });
+
+    it('should throw NotFoundException when project does not exist', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await expect(service.getWorkload(99)).rejects.toThrow(NotFoundException);
+      expect(userRepo.find).not.toHaveBeenCalled();
     });
   });
 });

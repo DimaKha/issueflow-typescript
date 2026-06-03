@@ -34,8 +34,7 @@ export class ProjectsController {
 
   @Get(':projectId/workload')
   getWorkload(@Param('projectId', ParseIntPipe) projectId: number) {
-    // Stub — fully implemented in M9
-    return [];
+    return this.projectsService.getWorkload(projectId);
   }
 
   @Get(':projectId')

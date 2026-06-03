@@ -8,6 +8,7 @@ import {
 import { TicketsService } from './tickets.service';
 import { Ticket, TicketStatus, TicketPriority, TicketType } from './ticket.entity';
 import { TicketDependency } from './ticket-dependency.entity';
+import { User, UserRole } from '../users/user.entity';
 import { ProjectsService } from '../projects/projects.service';
 import { UsersService } from '../users/users.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -44,8 +45,10 @@ describe('TicketsService', () => {
     update: jest.Mock;
     softRemove: jest.Mock;
     restore: jest.Mock;
+    count: jest.Mock;
   };
   let depRepo: { find: jest.Mock };
+  let userRepo: { find: jest.Mock };
   let projectsService: { findOne: jest.Mock };
   let usersService: { findOne: jest.Mock };
 
@@ -58,9 +61,12 @@ describe('TicketsService', () => {
       update: jest.fn(),
       softRemove: jest.fn(),
       restore: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
     };
     // Default: no blockers — existing tests that transition to DONE pass without a blocker check
     depRepo = { find: jest.fn().mockResolvedValue([]) };
+    // Default: no developers — existing create tests are unaffected
+    userRepo = { find: jest.fn().mockResolvedValue([]) };
     projectsService = { findOne: jest.fn().mockResolvedValue({ id: 1 }) };
     usersService = { findOne: jest.fn().mockResolvedValue({ id: 1 }) };
 
@@ -69,6 +75,7 @@ describe('TicketsService', () => {
         TicketsService,
         { provide: getRepositoryToken(Ticket), useValue: repo },
         { provide: getRepositoryToken(TicketDependency), useValue: depRepo },
+        { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: ProjectsService, useValue: projectsService },
         { provide: UsersService, useValue: usersService },
         { provide: AuditLogService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
@@ -129,6 +136,98 @@ describe('TicketsService', () => {
       await expect(
         service.create({ title: 'X', type: TicketType.BUG, projectId: 1, assigneeId: 99 }),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ──────────────────────────────────────────────
+  // create — auto-assignment
+  // ──────────────────────────────────────────────
+  describe('create — auto-assignment', () => {
+    const dev = (id: number) => ({ id, username: `dev${id}`, role: UserRole.DEVELOPER });
+
+    it('should assign to the developer with the fewest open tickets', async () => {
+      userRepo.find.mockResolvedValue([dev(2), dev(3)]);
+      // dev2 has 3 open, dev3 has 1 → pick dev3
+      repo.count.mockResolvedValueOnce(3).mockResolvedValueOnce(1);
+      const ticket = mockTicket({ assigneeId: 3 });
+      repo.create.mockReturnValue(ticket);
+      repo.save.mockResolvedValue(ticket);
+
+      await service.create({ title: 'X', type: TicketType.BUG, projectId: 1 });
+
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ assigneeId: 3 }),
+      );
+    });
+
+    it('should tie-break by lowest userId when multiple developers have the same open count', async () => {
+      // dev id=3 returned first by DB, dev id=2 returned second — both have 0 open tickets
+      userRepo.find.mockResolvedValue([dev(3), dev(2)]);
+      repo.count.mockResolvedValue(0); // both tied at 0 → lowest userId wins → assign to id=2
+      const ticket = mockTicket({ assigneeId: 2 });
+      repo.create.mockReturnValue(ticket);
+      repo.save.mockResolvedValue(ticket);
+
+      await service.create({ title: 'X', type: TicketType.BUG, projectId: 1 });
+
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ assigneeId: 2 }),
+      );
+    });
+
+    it('should leave assigneeId null when no developers exist', async () => {
+      userRepo.find.mockResolvedValue([]);
+      const ticket = mockTicket({ assigneeId: null });
+      repo.create.mockReturnValue(ticket);
+      repo.save.mockResolvedValue(ticket);
+
+      await service.create({ title: 'X', type: TicketType.BUG, projectId: 1 });
+
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ assigneeId: null }),
+      );
+    });
+
+    it('should count only open tickets scoped to the project when choosing assignee', async () => {
+      userRepo.find.mockResolvedValue([dev(2)]);
+      repo.count.mockResolvedValue(0);
+      const ticket = mockTicket({ assigneeId: 2 });
+      repo.create.mockReturnValue(ticket);
+      repo.save.mockResolvedValue(ticket);
+
+      await service.create({ title: 'X', type: TicketType.BUG, projectId: 1 });
+
+      expect(repo.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ assigneeId: 2, projectId: 1 }),
+        }),
+      );
+    });
+
+    it('should query only DEVELOPER role users — admin with 0 tickets is never a candidate', async () => {
+      // Even if an ADMIN user has 0 open tickets and a DEVELOPER has many,
+      // only DEVELOPERs must be considered for auto-assignment.
+      // The mock returns only dev(2) — simulating the DB returning only DEVELOPER rows.
+      // We verify the find() call includes role: DEVELOPER in the WHERE clause,
+      // which is what prevents admin id=1 (with 0 tickets) from winning.
+      userRepo.find.mockResolvedValue([dev(2)]); // dev id=2, 3 open tickets
+      repo.count.mockResolvedValue(3);
+      const ticket = mockTicket({ assigneeId: 2 });
+      repo.create.mockReturnValue(ticket);
+      repo.save.mockResolvedValue(ticket);
+
+      await service.create({ title: 'X', type: TicketType.BUG, projectId: 1 });
+
+      // Must have filtered by DEVELOPER role — admin users excluded at query level
+      expect(userRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ role: UserRole.DEVELOPER }),
+        }),
+      );
+      // DEVELOPER id=2 wins (only candidate)
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ assigneeId: 2 }),
+      );
     });
   });
 

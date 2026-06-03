@@ -5,6 +5,7 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   ParseIntPipe,
   HttpCode,
   HttpStatus,
@@ -12,6 +13,7 @@ import {
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { MentionsQueryDto } from './dto/mentions-query.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -24,7 +26,15 @@ export class UsersController {
     return this.usersService.findAll();
   }
 
-  // NOTE: GET /:userId/mentions (M9) must be declared before GET /:userId when added.
+  // Declared before /:userId to prevent NestJS treating "mentions" as a userId param
+  @Get(':userId/mentions')
+  getMentions(
+    @Param('userId', ParseIntPipe) id: number,
+    @Query() query: MentionsQueryDto,
+  ) {
+    return this.usersService.getMentions(id, query.page ?? 1, query.pageSize ?? 20);
+  }
+
   @Get(':userId')
   findOne(@Param('userId', ParseIntPipe) id: number) {
     return this.usersService.findOne(id);

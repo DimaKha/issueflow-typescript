@@ -4,6 +4,7 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from './users.service';
 import { User, UserRole } from './user.entity';
+import { Comment } from '../comments/comment.entity';
 import { AuditLogService } from '../audit-log/audit-log.service';
 
 jest.mock('bcrypt', () => ({
@@ -20,6 +21,13 @@ describe('UsersService', () => {
     findOne: jest.Mock;
     remove: jest.Mock;
   };
+  let commentRepo: {
+    createQueryBuilder: jest.Mock;
+    find: jest.Mock;
+  };
+  // Reusable chainable QB mock — reset getManyAndCount per test
+  let mockQbGetManyAndCount: jest.Mock;
+  let mockQb: Record<string, jest.Mock>;
 
   const mockUser: User = {
     id: 1,
@@ -41,10 +49,24 @@ describe('UsersService', () => {
       remove: jest.fn(),
     };
 
+    mockQbGetManyAndCount = jest.fn().mockResolvedValue([[], 0]);
+    mockQb = {
+      innerJoin: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: mockQbGetManyAndCount,
+    } as unknown as Record<string, jest.Mock>;
+    commentRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue(mockQb),
+      find: jest.fn().mockResolvedValue([]),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
         { provide: getRepositoryToken(User), useValue: repo },
+        { provide: getRepositoryToken(Comment), useValue: commentRepo },
         { provide: AuditLogService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
@@ -175,6 +197,97 @@ describe('UsersService', () => {
     it('should throw NotFoundException when user does not exist', async () => {
       repo.findOne.mockResolvedValue(null);
       await expect(service.remove(999)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ──────────────────────────────────────────────
+  // getMentions
+  // ──────────────────────────────────────────────
+  describe('getMentions', () => {
+    const mockComment = {
+      id: 10,
+      ticketId: 5,
+      content: 'Fix this @jdoe',
+      authorId: 2,
+      mentionedUsers: [
+        { id: 1, username: 'jdoe', fullName: 'John Doe', passwordHash: 'secret' },
+      ],
+      createdAt: new Date('2024-01-01'),
+      deletedAt: null,
+    };
+
+    it('should return { data, total, page } with correct item shape', async () => {
+      repo.findOne.mockResolvedValue(mockUser);
+      mockQbGetManyAndCount.mockResolvedValue([[{ id: 10 }], 1]);
+      commentRepo.find.mockResolvedValue([mockComment]);
+
+      const result = await service.getMentions(1);
+
+      expect(result.page).toBe(1);
+      expect(result.total).toBe(1);
+      expect(result.data).toHaveLength(1);
+      const item = result.data[0];
+      expect(item.id).toBe(10);
+      expect(item.ticketId).toBe(5);
+      expect(item.content).toBe('Fix this @jdoe');
+      expect(item.authorId).toBe(2);
+      expect(item.mentionedUsers[0]).toEqual({ id: 1, username: 'jdoe', fullName: 'John Doe' });
+      expect(item.mentionedUsers[0]).not.toHaveProperty('passwordHash');
+      expect(item).not.toHaveProperty('commentId');
+    });
+
+    it('should use default page=1 and pageSize=20', async () => {
+      repo.findOne.mockResolvedValue(mockUser);
+      mockQbGetManyAndCount.mockResolvedValue([[], 0]);
+
+      await service.getMentions(1);
+
+      expect(mockQb.skip).toHaveBeenCalledWith(0);   // (1 - 1) * 20
+      expect(mockQb.take).toHaveBeenCalledWith(20);
+    });
+
+    it('should apply custom page and pageSize', async () => {
+      repo.findOne.mockResolvedValue(mockUser);
+      mockQbGetManyAndCount.mockResolvedValue([[], 0]);
+
+      const result = await service.getMentions(1, 3, 5);
+
+      expect(mockQb.skip).toHaveBeenCalledWith(10);  // (3 - 1) * 5
+      expect(mockQb.take).toHaveBeenCalledWith(5);
+      expect(result.page).toBe(3);
+    });
+
+    it('should return { data: [], total: 0, page } when no mentions exist (deleted filtered by TypeORM)', async () => {
+      repo.findOne.mockResolvedValue(mockUser);
+      mockQbGetManyAndCount.mockResolvedValue([[], 0]);
+
+      const result = await service.getMentions(1);
+
+      expect(result).toEqual({ data: [], total: 0, page: 1 });
+      expect(commentRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundException when user does not exist', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await expect(service.getMentions(99)).rejects.toThrow(NotFoundException);
+      expect(commentRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('should filter on non-deleted tickets via innerJoin condition', async () => {
+      repo.findOne.mockResolvedValue(mockUser);
+      mockQbGetManyAndCount.mockResolvedValue([[], 0]);
+
+      await service.getMentions(1);
+
+      // Verify the tickets join includes the deleted_at IS NULL guard
+      // innerJoin('tickets', 't', 'condition') → args[0]='tickets', args[2]=condition
+      const joinCalls = (mockQb.innerJoin as jest.Mock).mock.calls;
+      const ticketJoin = joinCalls.find((args: any[]) =>
+        typeof args[0] === 'string' && args[0].includes('ticket'),
+      );
+      expect(ticketJoin).toBeDefined();
+      expect(ticketJoin![2]).toContain('deleted_at IS NULL');
     });
   });
 });

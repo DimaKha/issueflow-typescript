@@ -13,6 +13,7 @@ import { TicketDependency } from './ticket-dependency.entity';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { QueryTicketsDto } from './dto/query-tickets.dto';
+import { User, UserRole } from '../users/user.entity';
 import { ProjectsService } from '../projects/projects.service';
 import { UsersService } from '../users/users.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -35,6 +36,8 @@ export class TicketsService {
     private readonly repo: Repository<Ticket>,
     @InjectRepository(TicketDependency)
     private readonly depRepo: Repository<TicketDependency>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
     private readonly projectsService: ProjectsService,
     private readonly usersService: UsersService,
     private readonly auditLog: AuditLogService,
@@ -43,12 +46,29 @@ export class TicketsService {
   async create(dto: CreateTicketDto, performedBy?: number | null): Promise<Ticket> {
     await this.projectsService.findOne(dto.projectId);
 
+    let autoAssignedId: number | null = null;
+
     if (dto.assigneeId !== undefined) {
       await this.usersService.findOne(dto.assigneeId);
+    } else {
+      const developers = await this.userRepo.find({ where: { role: UserRole.DEVELOPER } });
+      if (developers.length > 0) {
+        const counts = await Promise.all(
+          developers.map(async (dev) => ({
+            devId: dev.id,
+            count: await this.repo.count({
+              where: { assigneeId: dev.id, projectId: dto.projectId, status: Not(TicketStatus.DONE) },
+            }),
+          })),
+        );
+        counts.sort((a, b) => a.count - b.count || a.devId - b.devId);
+        autoAssignedId = counts[0].devId;
+      }
     }
 
     const dueDate = dto.dueDate ? new Date(dto.dueDate) : null;
     const status = dto.status ?? TicketStatus.TODO;
+    const assigneeId = dto.assigneeId ?? autoAssignedId;
 
     const ticket = this.repo.create({
       title: dto.title,
@@ -57,7 +77,7 @@ export class TicketsService {
       priority: dto.priority ?? TicketPriority.MEDIUM,
       type: dto.type,
       projectId: dto.projectId,
-      assigneeId: dto.assigneeId ?? null,
+      assigneeId,
       dueDate,
       isOverdue: computeIsOverdue(dueDate, status),
     });
@@ -73,6 +93,20 @@ export class TicketsService {
         payload: { id: saved.id, title: saved.title, status: saved.status, priority: saved.priority, type: saved.type, projectId: saved.projectId, assigneeId: saved.assigneeId },
       });
     } catch { /* audit log failure must not break main operation */ }
+
+    if (autoAssignedId !== null) {
+      try {
+        await this.auditLog.log({
+          performedBy: null,
+          actor: 'SYSTEM',
+          action: 'AUTO_ASSIGN',
+          entityType: 'TICKET',
+          entityId: saved.id,
+          payload: { ticketId: saved.id, assigneeId: autoAssignedId },
+        });
+      } catch { /* audit log failure must not break main operation */ }
+    }
+
     return saved;
   }
 

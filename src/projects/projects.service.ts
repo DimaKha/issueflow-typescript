@@ -6,16 +6,29 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not } from 'typeorm';
 import { Project } from './project.entity';
+import { Ticket, TicketStatus } from '../tickets/ticket.entity';
+import { User, UserRole } from '../users/user.entity';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { UsersService } from '../users/users.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+
+export interface WorkloadEntry {
+  userId: number;
+  username: string;
+  fullName: string;
+  openTicketCount: number;
+}
 
 @Injectable()
 export class ProjectsService {
   constructor(
     @InjectRepository(Project)
     private readonly repo: Repository<Project>,
+    @InjectRepository(Ticket)
+    private readonly ticketRepo: Repository<Ticket>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
     private readonly usersService: UsersService,
     private readonly auditLog: AuditLogService,
   ) {}
@@ -107,5 +120,24 @@ export class ProjectsService {
 
   async findOneWithDeleted(id: number): Promise<Project | null> {
     return this.repo.findOne({ where: { id }, withDeleted: true });
+  }
+
+  async getWorkload(projectId: number): Promise<WorkloadEntry[]> {
+    await this.findOne(projectId);
+
+    const developers = await this.userRepo.find({ where: { role: UserRole.DEVELOPER } });
+
+    const results = await Promise.all(
+      developers.map(async (dev) => ({
+        userId: dev.id,
+        username: dev.username,
+        fullName: dev.fullName,
+        openTicketCount: await this.ticketRepo.count({
+          where: { assigneeId: dev.id, projectId, status: Not(TicketStatus.DONE) },
+        }),
+      })),
+    );
+
+    return results.sort((a, b) => a.userId - b.userId);
   }
 }

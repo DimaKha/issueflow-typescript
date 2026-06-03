@@ -6,13 +6,14 @@ import { Ticket } from './ticket.entity';
 import { TicketDependency } from './ticket-dependency.entity';
 import { DependenciesController } from './dependencies.controller';
 import { DependenciesService } from './dependencies.service';
+import { User } from '../users/user.entity';
 import { ProjectsModule } from '../projects/projects.module';
 import { UsersModule } from '../users/users.module';
 import { AuditLogModule } from '../audit-log/audit-log.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Ticket, TicketDependency]),
+    TypeOrmModule.forFeature([Ticket, TicketDependency, User]),
     ProjectsModule,
     UsersModule,
     AuditLogModule,
